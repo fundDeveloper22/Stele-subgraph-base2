@@ -281,3 +281,33 @@ type TimelockChange @entity(immutable: true) {
   blockTimestamp: BigInt!
   transactionHash: Bytes!
 }
+
+# Proposal Vote Results Aggregation
+type ProposalVoteResult @entity(immutable: false) {
+  id: ID! # proposalId
+  proposalId: BigInt! # uint256
+  forVotes: BigInt! # total votes for
+  againstVotes: BigInt! # total votes against
+  abstainVotes: BigInt! # total abstain votes
+  totalVotes: BigInt! # total votes cast
+  forPercentage: BigDecimal! # percentage for (0-100)
+  againstPercentage: BigDecimal! # percentage against (0-100)
+  abstainPercentage: BigDecimal! # percentage abstain (0-100)
+  voterCount: BigInt! # number of unique voters
+  lastUpdatedBlock: BigInt! # last block when updated
+  lastUpdatedTimestamp: BigInt! # last timestamp when updated
+  isFinalized: Boolean! # whether voting period has ended
+}
+
+# Individual Vote Record with aggregation helper
+type Vote @entity(immutable: true) {
+  id: ID! # proposalId-voter
+  proposalId: BigInt! # uint256
+  voter: Bytes! # address
+  support: Int! # uint8 (0=against, 1=for, 2=abstain)
+  weight: BigInt! # uint256
+  reason: String! # string
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
