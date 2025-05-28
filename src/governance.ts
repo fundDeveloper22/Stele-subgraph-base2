@@ -27,12 +27,72 @@ import {
   VotingPeriodSet,
   TimelockChange,
   ProposalVoteResult,
-  Vote
+  Vote,
+  Proposal
 } from "../generated/schema"
 
 import { BigInt, BigDecimal, ethereum } from "@graphprotocol/graph-ts"
 
+// Helper function to determine initial proposal status based on creation time
+function getInitialProposalStatus(voteStart: BigInt, creationTimestamp: BigInt): string {
+  if (creationTimestamp.lt(voteStart)) {
+    return "PENDING"
+  } else {
+    return "ACTIVE"
+  }
+}
+
+// Helper function to create or update Proposal entity
+function createOrUpdateProposal(
+  proposalId: BigInt,
+  proposer: Bytes,
+  targets: Bytes[],
+  values: BigInt[],
+  signatures: string[],
+  calldatas: Bytes[],
+  voteStart: BigInt,
+  voteEnd: BigInt,
+  description: string,
+  timestamp: BigInt,
+  blockNumber: BigInt
+): void {
+  let proposal = Proposal.load(proposalId.toString())
+  
+  if (!proposal) {
+    proposal = new Proposal(proposalId.toString())
+    proposal.proposalId = proposalId
+    proposal.proposer = proposer
+    proposal.targets = targets
+    proposal.values = values
+    proposal.signatures = signatures
+    proposal.calldatas = calldatas
+    proposal.voteStart = voteStart
+    proposal.voteEnd = voteEnd
+    proposal.description = description
+    proposal.createdAt = timestamp
+    proposal.createdAtBlock = blockNumber
+    proposal.queuedAt = null
+    proposal.executedAt = null
+    proposal.canceledAt = null
+    proposal.eta = null
+    
+    // Set initial status based on creation time vs vote start time
+    proposal.status = getInitialProposalStatus(voteStart, timestamp)
+  }
+  
+  proposal.lastUpdatedBlock = blockNumber
+  
+  // Link to vote result if exists
+  let voteResult = ProposalVoteResult.load(proposalId.toString())
+  if (voteResult) {
+    proposal.voteResult = voteResult.id
+  }
+  
+  proposal.save()
+}
+
 export function handleProposalCreated(event: ProposalCreatedEvent): void {
+  // Save ProposalCreated event entity
   let entity = new ProposalCreated(
     event.transaction.hash.concatI32(event.logIndex.toI32())
   )
@@ -52,11 +112,9 @@ export function handleProposalCreated(event: ProposalCreatedEvent): void {
   entity.voteStart = event.params.voteStart
   entity.voteEnd = event.params.voteEnd
   entity.description = event.params.description
-
   entity.blockNumber = event.block.number
   entity.blockTimestamp = event.block.timestamp
   entity.transactionHash = event.transaction.hash
-
   entity.save()
 
   // Initialize ProposalVoteResult
@@ -74,18 +132,32 @@ export function handleProposalCreated(event: ProposalCreatedEvent): void {
   voteResult.lastUpdatedTimestamp = event.block.timestamp
   voteResult.isFinalized = false
   voteResult.save()
+
+  // Create comprehensive Proposal entity
+  createOrUpdateProposal(
+    event.params.proposalId,
+    event.params.proposer,
+    targets,
+    event.params.values,
+    event.params.signatures,
+    event.params.calldatas,
+    event.params.voteStart,
+    event.params.voteEnd,
+    event.params.description,
+    event.block.timestamp,
+    event.block.number
+  )
 }
 
 export function handleProposalCanceled(event: ProposalCanceledEvent): void {
+  // Save ProposalCanceled event entity
   let entity = new ProposalCanceled(
     event.transaction.hash.concatI32(event.logIndex.toI32())
   )
   entity.proposalId = event.params.proposalId
-
   entity.blockNumber = event.block.number
   entity.blockTimestamp = event.block.timestamp
   entity.transactionHash = event.transaction.hash
-
   entity.save()
 
   // Finalize vote result
@@ -95,19 +167,27 @@ export function handleProposalCanceled(event: ProposalCanceledEvent): void {
     voteResult.lastUpdatedBlock = event.block.number
     voteResult.lastUpdatedTimestamp = event.block.timestamp
     voteResult.save()
+  }
+
+  // Update Proposal status to CANCELED
+  let proposal = Proposal.load(event.params.proposalId.toString())
+  if (proposal) {
+    proposal.status = "CANCELED"
+    proposal.canceledAt = event.block.timestamp
+    proposal.lastUpdatedBlock = event.block.number
+    proposal.save()
   }
 }
 
 export function handleProposalExecuted(event: ProposalExecutedEvent): void {
+  // Save ProposalExecuted event entity
   let entity = new ProposalExecuted(
     event.transaction.hash.concatI32(event.logIndex.toI32())
   )
   entity.proposalId = event.params.proposalId
-
   entity.blockNumber = event.block.number
   entity.blockTimestamp = event.block.timestamp
   entity.transactionHash = event.transaction.hash
-
   entity.save()
 
   // Finalize vote result
@@ -118,20 +198,38 @@ export function handleProposalExecuted(event: ProposalExecutedEvent): void {
     voteResult.lastUpdatedTimestamp = event.block.timestamp
     voteResult.save()
   }
+
+  // Update Proposal status to EXECUTED
+  let proposal = Proposal.load(event.params.proposalId.toString())
+  if (proposal) {
+    proposal.status = "EXECUTED"
+    proposal.executedAt = event.block.timestamp
+    proposal.lastUpdatedBlock = event.block.number
+    proposal.save()
+  }
 }
 
 export function handleProposalQueued(event: ProposalQueuedEvent): void {
+  // Save ProposalQueued event entity
   let entity = new ProposalQueued(
     event.transaction.hash.concatI32(event.logIndex.toI32())
   )
   entity.proposalId = event.params.proposalId
   entity.eta = event.params.eta
-
   entity.blockNumber = event.block.number
   entity.blockTimestamp = event.block.timestamp
   entity.transactionHash = event.transaction.hash
-
   entity.save()
+
+  // Update Proposal status to QUEUED
+  let proposal = Proposal.load(event.params.proposalId.toString())
+  if (proposal) {
+    proposal.status = "QUEUED"
+    proposal.queuedAt = event.block.timestamp
+    proposal.eta = event.params.eta
+    proposal.lastUpdatedBlock = event.block.number
+    proposal.save()
+  }
 }
 
 export function handleVoteCast(event: VoteCastEvent): void {
@@ -164,6 +262,26 @@ export function handleVoteCast(event: VoteCastEvent): void {
   entity.save()
 
   // Update vote aggregation
+  updateProposalVoteResult(event.params.proposalId, event.params.support, event.params.weight, event.block)
+}
+
+export function handleVoteCastWithParams(event: VoteCastWithParamsEvent): void {
+  // Save VoteCastWithParams event entity
+  let entity = new VoteCastWithParams(
+    event.transaction.hash.concatI32(event.logIndex.toI32())
+  )
+  entity.voter = event.params.voter
+  entity.proposalId = event.params.proposalId
+  entity.support = event.params.support
+  entity.weight = event.params.weight
+  entity.reason = event.params.reason
+  entity.params = event.params.params
+  entity.blockNumber = event.block.number
+  entity.blockTimestamp = event.block.timestamp
+  entity.transactionHash = event.transaction.hash
+  entity.save()
+
+  // Update vote aggregation (same as VoteCast)
   updateProposalVoteResult(event.params.proposalId, event.params.support, event.params.weight, event.block)
 }
 
@@ -210,28 +328,15 @@ function updateProposalVoteResult(proposalId: BigInt, support: i32, weight: BigI
   voteResult.lastUpdatedBlock = block.number
   voteResult.lastUpdatedTimestamp = block.timestamp
 
-  // Check if voting period has ended (we'll update this in other handlers)
-  // For now, keep isFinalized as false until proposal is executed/canceled
-
+  // Keep isFinalized as false until proposal is executed/canceled
   voteResult.save()
-}
 
-export function handleVoteCastWithParams(event: VoteCastWithParamsEvent): void {
-  let entity = new VoteCastWithParams(
-    event.transaction.hash.concatI32(event.logIndex.toI32())
-  )
-  entity.voter = event.params.voter
-  entity.proposalId = event.params.proposalId
-  entity.support = event.params.support
-  entity.weight = event.params.weight
-  entity.reason = event.params.reason
-  entity.params = event.params.params
-
-  entity.blockNumber = event.block.number
-  entity.blockTimestamp = event.block.timestamp
-  entity.transactionHash = event.transaction.hash
-
-  entity.save()
+  // Update proposal's vote result link
+  let proposal = Proposal.load(proposalId.toString())
+  if (proposal) {
+    proposal.voteResult = voteResult.id
+    proposal.save()
+  }
 }
 
 export function handleProposalThresholdSet(event: ProposalThresholdSetEvent): void {
@@ -240,11 +345,9 @@ export function handleProposalThresholdSet(event: ProposalThresholdSetEvent): vo
   )
   entity.oldProposalThreshold = event.params.oldProposalThreshold
   entity.newProposalThreshold = event.params.newProposalThreshold
-
   entity.blockNumber = event.block.number
   entity.blockTimestamp = event.block.timestamp
   entity.transactionHash = event.transaction.hash
-
   entity.save()
 }
 
@@ -254,11 +357,9 @@ export function handleQuorumNumeratorUpdated(event: QuorumNumeratorUpdatedEvent)
   )
   entity.oldQuorumNumerator = event.params.oldQuorumNumerator
   entity.newQuorumNumerator = event.params.newQuorumNumerator
-
   entity.blockNumber = event.block.number
   entity.blockTimestamp = event.block.timestamp
   entity.transactionHash = event.transaction.hash
-
   entity.save()
 }
 
@@ -268,11 +369,9 @@ export function handleVotingDelaySet(event: VotingDelaySetEvent): void {
   )
   entity.oldVotingDelay = event.params.oldVotingDelay
   entity.newVotingDelay = event.params.newVotingDelay
-
   entity.blockNumber = event.block.number
   entity.blockTimestamp = event.block.timestamp
   entity.transactionHash = event.transaction.hash
-
   entity.save()
 }
 
@@ -282,11 +381,9 @@ export function handleVotingPeriodSet(event: VotingPeriodSetEvent): void {
   )
   entity.oldVotingPeriod = event.params.oldVotingPeriod
   entity.newVotingPeriod = event.params.newVotingPeriod
-
   entity.blockNumber = event.block.number
   entity.blockTimestamp = event.block.timestamp
   entity.transactionHash = event.transaction.hash
-
   entity.save()
 }
 
@@ -296,10 +393,8 @@ export function handleTimelockChange(event: TimelockChangeEvent): void {
   )
   entity.oldTimelock = event.params.oldTimelock
   entity.newTimelock = event.params.newTimelock
-
   entity.blockNumber = event.block.number
   entity.blockTimestamp = event.block.timestamp
   entity.transactionHash = event.transaction.hash
-
   entity.save()
 } 

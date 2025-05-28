@@ -299,6 +299,43 @@ type ProposalVoteResult @entity(immutable: false) {
   isFinalized: Boolean! # whether voting period has ended
 }
 
+enum ProposalStatus {
+  PENDING         # Created but voting hasn't started
+  ACTIVE          # Voting is currently active
+  QUEUED          # Proposal is queued for execution (timelock period)
+  EXECUTED        # Proposal has been executed
+  CANCELED        # Proposal has been canceled
+}
+
+# Comprehensive Proposal State Tracking
+type Proposal @entity(immutable: false) {
+  id: ID! # proposalId
+  proposalId: BigInt! # uint256
+  proposer: Bytes! # address
+  targets: [Bytes!]! # address[]
+  values: [BigInt!]! # uint256[]
+  signatures: [String!]! # string[]
+  calldatas: [Bytes!]! # bytes[]
+  voteStart: BigInt! # uint256
+  voteEnd: BigInt! # uint256
+  description: String! # string
+  
+  # Status tracking
+  status: ProposalStatus! # current status
+  createdAt: BigInt! # creation timestamp
+  queuedAt: BigInt # queued timestamp (null if not queued)
+  executedAt: BigInt # executed timestamp (null if not executed)
+  canceledAt: BigInt # canceled timestamp (null if not canceled)
+  eta: BigInt # execution eta (null if not queued)
+  
+  # Vote aggregation (linked to ProposalVoteResult)
+  voteResult: ProposalVoteResult
+  
+  # Block info
+  createdAtBlock: BigInt!
+  lastUpdatedBlock: BigInt!
+}
+
 # Individual Vote Record with aggregation helper
 type Vote @entity(immutable: true) {
   id: ID! # proposalId-voter
